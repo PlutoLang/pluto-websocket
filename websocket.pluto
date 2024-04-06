@@ -1,0 +1,108 @@
+-- https://github.com/PlutoLang/pluto-websocket
+
+local { base64, crypto, socket } = require "*"
+
+local function hashKey(key)
+    key ..= "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+    return base64.encode(crypto.sha1(key, true))
+end
+
+local function wsUpgrade(sock, host, path = "/")
+    local key = range(16):map(|| -> string.char(math.random(0, 255))):concat("") |> base64.encode
+    sock:send("GET "..path.." HTTP/1.1\r\n"
+           .. "Host: "..host.."\r\n"
+           .. "User-Agent: pluto-websocket\r\n"
+           .. "Connection: Upgrade\r\n"
+           .. "Upgrade: websocket\r\n"
+           .. "Sec-WebSocket-Key: "..key.."\r\n"
+           .. "Sec-WebSocket-Version: 13\r\n\r\n")
+    if data := sock:recv() then
+        return data:find(hashKey(key), 1, true) ~= nil
+    end
+    return false
+end
+
+local function wsSend(sock, payload, binary)
+    local opcode = binary ? 2 : 1
+
+    local data = {}
+
+    data[#data + 1] = opcode | 0x80 -- fin
+
+    if #payload <= 125 then
+        data[#data + 1] = #payload | 0x80 -- has mask
+    elseif #payload <= 0xFFFF then
+        data[#data + 1] = 126 | 0x80
+        data[#data + 1] = (#payload >> 8) & 0xff
+        data[#data + 1] = #payload & 0xff
+    else
+        data[#data + 1] = 127 | 0x80
+        data[#data + 1] = (#payload >> 56) & 0xff
+        data[#data + 1] = (#payload >> 48) & 0xff
+        data[#data + 1] = (#payload >> 40) & 0xff
+        data[#data + 1] = (#payload >> 32) & 0xff
+        data[#data + 1] = (#payload >> 24) & 0xff
+        data[#data + 1] = (#payload >> 16) & 0xff
+        data[#data + 1] = (#payload >> 8) & 0xff
+        data[#data + 1] = #payload & 0xff
+    end
+
+    local mask = {}
+    for i = 0, 3 do
+        mask[i] = math.random(0, 255)
+        data[#data + 1] = mask[i]
+    end
+    for i = 1, #payload do
+        data[#data + 1] = string.byte(payload[i]) ~ mask[(i - 1) % 4]
+    end
+
+    data = data:map(string.char):concat("")
+    sock:send(data)
+end
+
+local function wsRecvFrame(sock)
+    local data = sock:recv()
+    if not data or #data < 2 then
+        return nil
+    end
+    local opcode, fin = string.byte(data[1]) & 0xf, string.byte(data[1]) >> 7 ~= 0
+    local payload_len, masked = string.byte(data[2]) & 0x7f, string.byte(data[2]) >> 7 ~= 0
+    assert(not masked) -- Server shouldn't mask its data
+    local header_len = 2
+    if payload_len == 126 then
+        payload_len = string.unpack(">H", data, 3)
+        header_len += 2
+    elseif payload_len == 127 then
+        payload_len = string.unpack(">T", data, 3)
+        header_len += 8
+    end
+    data = data:sub(header_len + 1)
+    while #data < payload_len do
+        data ..= sock:recv()
+    end
+    if #data > payload_len then
+        sock:unrecv(data:sub(payload_len + 1))
+        data = data:sub(1, payload_len)
+    end
+    return opcode, data, fin
+end
+
+local function wsRecv(sock)
+    local opcode, data, fin = wsRecvFrame(sock)
+    if opcode == nil then
+        return nil
+    end
+    while not fin do
+        local _, frame
+        _, frame, fin = wsRecvFrame(sock)
+        data ..= frame
+    end
+    if opcode == 8 then
+        error(data:sub(3).." ("..string.unpack(">H", data)..")")
+    end
+    return data
+end
+
+socket.wsUpgrade = wsUpgrade
+socket.wsSend = wsSend
+socket.wsRecv = wsRecv

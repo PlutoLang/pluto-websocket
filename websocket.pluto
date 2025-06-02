@@ -45,11 +45,11 @@ local function wsSend(sock, payload, binary)
     if #payload <= 125 then
         data[#data + 1] = #payload | (mask ? 0x80 : 0)
     elseif #payload <= 0xFFFF then
-        data[#data + 1] = 126 | 0x80
+        data[#data + 1] = 126 | (mask ? 0x80 : 0)
         data[#data + 1] = (#payload >> 8) & 0xff
         data[#data + 1] = #payload & 0xff
     else
-        data[#data + 1] = 127 | 0x80
+        data[#data + 1] = 127 | (mask ? 0x80 : 0)
         data[#data + 1] = (#payload >> 56) & 0xff
         data[#data + 1] = (#payload >> 48) & 0xff
         data[#data + 1] = (#payload >> 40) & 0xff

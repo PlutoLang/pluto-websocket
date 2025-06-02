@@ -53,7 +53,7 @@ local function wsSend(sock, payload, binary)
         data[#data + 1] = mask[i]
     end
     for i = 1, #payload do
-        data[#data + 1] = string.byte(payload[i]) ~ mask[(i - 1) % 4]
+        data[#data + 1] = payload:byte(i) ~ mask[(i - 1) % 4]
     end
 
     data = data:map(string.char):concat("")
@@ -65,8 +65,8 @@ local function wsRecvFrame(sock)
     if not data or #data < 2 then
         return nil
     end
-    local opcode, fin = string.byte(data[1]) & 0xf, string.byte(data[1]) >> 7 ~= 0
-    local payload_len, masked = string.byte(data[2]) & 0x7f, string.byte(data[2]) >> 7 ~= 0
+    local opcode, fin = data:byte(1) & 0xf, data:byte(1) >> 7 ~= 0
+    local payload_len, masked = data:byte(2) & 0x7f, data:byte(2) >> 7 ~= 0
     assert(not masked) -- Server shouldn't mask its data
     local header_len = 2
     if payload_len == 126 then

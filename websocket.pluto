@@ -7,30 +7,43 @@ local function hashKey(key)
     return base64.encode(crypto.sha1(key, true))
 end
 
-local function wsUpgrade(sock, host, path = "/")
-    local key = range(16):map(|| -> string.char(math.random(0, 255))):concat("") |> base64.encode
-    sock:send("GET "..path.." HTTP/1.1\r\n"
-           .. "Host: "..host.."\r\n"
-           .. "User-Agent: pluto-websocket\r\n"
-           .. "Connection: Upgrade\r\n"
-           .. "Upgrade: websocket\r\n"
-           .. "Sec-WebSocket-Key: "..key.."\r\n"
-           .. "Sec-WebSocket-Version: 13\r\n\r\n")
-    if data := sock:recv() then
-        return data:find(hashKey(key), 1, true) ~= nil
+-- Client: sock, host, path = "/"
+-- Server: sock, key
+local function wsUpgrade(sock, ...vargs)
+    if sock:getside() == "client" then
+        local [ host, path ] = vargs
+        local key = range(16):map(|| -> string.char(math.random(0, 255))):concat("") |> base64.encode
+        sock:send("GET "..(path ?? "/").." HTTP/1.1\r\n"
+               .. "Host: "..host.."\r\n"
+               .. "User-Agent: pluto-websocket\r\n"
+               .. "Connection: Upgrade\r\n"
+               .. "Upgrade: websocket\r\n"
+               .. "Sec-WebSocket-Key: "..key.."\r\n"
+               .. "Sec-WebSocket-Version: 13\r\n\r\n")
+        if data := sock:recv() then
+            return data:find(hashKey(key), 1, true) ~= nil
+        end
+        return false
+    else
+        local [ key ] = vargs
+        sock:send("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nServer: pluto-websocket\r\nSec-WebSocket-Accept: "..hashKey(key).."\r\n\r\n")
     end
-    return false
 end
 
 local function wsSend(sock, payload, binary)
     local opcode = binary ? 2 : 1
+
+    local mask
+    if sock:getside() == "client" then
+        mask = { [0] = math.random(0, 255), [1] = math.random(0, 255), [2] = math.random(0, 255), [3] = math.random(0, 255) }
+    end
 
     local data = {}
 
     data[#data + 1] = opcode | 0x80 -- fin
 
     if #payload <= 125 then
-        data[#data + 1] = #payload | 0x80 -- has mask
+        data[#data + 1] = #payload | (mask ? 0x80 : 0)
     elseif #payload <= 0xFFFF then
         data[#data + 1] = 126 | 0x80
         data[#data + 1] = (#payload >> 8) & 0xff
@@ -47,16 +60,19 @@ local function wsSend(sock, payload, binary)
         data[#data + 1] = #payload & 0xff
     end
 
-    local mask = {}
-    for i = 0, 3 do
-        mask[i] = math.random(0, 255)
-        data[#data + 1] = mask[i]
+    if mask then
+        for i = 0, 3 do
+            data[#data + 1] = mask[i]
+        end
+        for i = 1, #payload do
+            data[#data + 1] = payload:byte(i) ~ mask[(i - 1) % 4]
+        end
+        data = data:map(string.char):concat("")
+    else
+        data = data:map(string.char)
+        data[#data + 1] = payload
+        data = data:concat("")
     end
-    for i = 1, #payload do
-        data[#data + 1] = payload:byte(i) ~ mask[(i - 1) % 4]
-    end
-
-    data = data:map(string.char):concat("")
     sock:send(data)
 end
 
@@ -66,8 +82,7 @@ local function wsRecvFrame(sock)
         return nil
     end
     local opcode, fin = data:byte(1) & 0xf, data:byte(1) >> 7 ~= 0
-    local payload_len, masked = data:byte(2) & 0x7f, data:byte(2) >> 7 ~= 0
-    assert(not masked) -- Server shouldn't mask its data
+    local payload_len, mask = data:byte(2) & 0x7f, data:byte(2) >> 7 ~= 0
     local header_len = 2
     if payload_len == 126 then
         payload_len = string.unpack(">H", data, 3)
@@ -77,12 +92,23 @@ local function wsRecvFrame(sock)
         header_len += 8
     end
     data = data:sub(header_len + 1)
+    if mask then
+        mask = { [0] = data:byte(1), [1] = data:byte(2), [2] = data:byte(3), [3] = data:byte(4) }
+        data = data:sub(5)
+    end
     while #data < payload_len do
         data ..= sock:recv()
     end
     if #data > payload_len then
         sock:unrecv(data:sub(payload_len + 1))
         data = data:sub(1, payload_len)
+    end
+    if mask then
+        local t = {}
+        for i = 1, #data do
+            t[i] = string.char(data:byte(i) ~ mask[(i - 1) % 4])
+        end
+        data = t:concat("")
     end
     return opcode, data, fin
 end
@@ -106,3 +132,11 @@ end
 socket.wsUpgrade = wsUpgrade
 socket.wsSend = wsSend
 socket.wsRecv = wsRecv
+
+export function wsIsUpgradeRequest(text)
+    if text:find("[Cc]onnection: *[Uu]pgrade") then
+        if key := text:match("[Ss]ec%-[Ww]eb[Ss]ocket%-[Kk]ey: *([a-zA-Z0-9+/%-_=]+)") then
+            return key
+        end
+    end
+end

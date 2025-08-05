@@ -136,9 +136,12 @@ socket.wsSend = wsSend
 socket.wsRecv = wsRecv
 
 export function wsIsUpgradeRequest(text)
-    if text:find("[Cc]onnection: *[Uu]pgrade") then
+    if text:find("[Cc]onnection:[%a%s%-,]*[Uu]pgrade") then
         if key := text:match("[Ss]ec%-[Ww]eb[Ss]ocket%-[Kk]ey: *([a-zA-Z0-9+/%-_=]+)") then
             return key
         end
     end
 end
+--print("Connection: upgrade":find("[Cc]onnection:[%a%s%-,]*[Uu]pgrade"))
+--print("Connection: Upgrade":find("[Cc]onnection:[%a%s%-,]*[Uu]pgrade"))
+--print("Connection: keep-alive, Upgrade":find("[Cc]onnection:[%a%s%-,]*[Uu]pgrade"))

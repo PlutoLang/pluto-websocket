@@ -32,8 +32,10 @@ local function wsUpgrade(sock, ...vargs)
     end
 end
 
-local function wsSend(sock, payload, binary)
-    local opcode = binary ? 2 : 1
+local function wsSend(sock, payload, opcode)
+    if type(opcode) ~= "number" then
+        opcode = opcode ? 2 : 1
+    end
 
     local mask
     if sock:getside() == "client" then

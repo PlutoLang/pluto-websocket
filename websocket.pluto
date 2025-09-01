@@ -130,6 +130,10 @@ local function wsRecv(sock)
     if opcode == 8 then
         error(data:sub(3).." ("..string.unpack(">H", data)..")")
     end
+    if opcode == 9 then
+        wsSend(sock, data, 10)
+        return wsRecv(sock)
+    end
     return data
 end
 
